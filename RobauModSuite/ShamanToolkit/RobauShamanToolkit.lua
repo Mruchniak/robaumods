@@ -32,7 +32,7 @@ local db
 local defaults = {
     point = "CENTER", x = 0, y = -150, scale = 1, locked = false, shown = true,
     alertEnabled = true, alertOffhand = false,
-    spacing = 8, showTimer = true, showNumbers = true, defaultImbue = "auto",
+    spacing = 8, showTimer = false, showBar = true, showNumbers = true, defaultImbue = "auto",
     alertPoint = "CENTER", alertX = 0, alertY = 180,
     custom = {},        -- { {name="...", kind="earth"} }
 }
@@ -89,7 +89,7 @@ local function savePosition()
     db.point, db.x, db.y = point, x, y
 end
 
-local updateNumbers   -- defined below, used by the box OnUpdate
+local updateNumbers, updateActive, snap   -- defined below, used by the box OnUpdate
 
 local function makeBox()
     box = CreateFrame("Frame", "RobauShamanToolkitFrame", UIParent)
@@ -116,9 +116,14 @@ local function makeBox()
     end)
     box.handle = handle
 
-    local acc = 0
+    local acc, poll = 0, 0
     box:SetScript("OnUpdate", function(_, dt)
         acc = acc + dt
+        poll = poll + dt
+        if poll > 0.4 then
+            poll = 0
+            updateActive()
+        end
         if acc > 0.2 then
             acc = 0
             updateNumbers()
@@ -155,12 +160,25 @@ local function makeButton(spell, element)
     local cd = CreateFrame("Cooldown", nil, b, "CooldownFrameTemplate")
     cd:SetAllPoints()
     cd:SetHideCountdownNumbers(true)
+    pcall(cd.SetReverse, cd, true)   -- lit part = time left, like a buff, not a cooldown
     b.cd = cd
     local tf = CreateFrame("Frame", nil, b)
     tf:SetAllPoints()
     tf:SetFrameLevel(cd:GetFrameLevel() + 3)
     b.time = tf:CreateFontString(nil, "OVERLAY", "NumberFontNormalLarge")
     b.time:SetPoint("CENTER", 0, 0)
+    -- duration bar along the bottom edge: drains while the totem stands
+    b.barBg = tf:CreateTexture(nil, "OVERLAY")
+    b.barBg:SetPoint("BOTTOMLEFT", 1, 1)
+    b.barBg:SetPoint("BOTTOMRIGHT", -1, 1)
+    b.barBg:SetHeight(6)
+    b.barBg:SetColorTexture(0, 0, 0, 0.8)
+    b.bar = tf:CreateTexture(nil, "OVERLAY")
+    b.bar:SetPoint("BOTTOMLEFT", 2, 2)
+    b.bar:SetHeight(4)
+    b.bar:SetWidth(1)
+    b.barBg:Hide()
+    b.bar:Hide()
 
     b.spellName = spell.name
     b.element = element
@@ -173,7 +191,12 @@ local function makeButton(spell, element)
         GameTooltip:Show()
     end)
     b:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    b:SetScript("PostClick", function(self) self.lastCast = GetTime() end)
+    b:SetScript("PostClick", function(self)
+        self.lastCast = GetTime()
+        local name = self.spellName
+        C_Timer.After(0.3, function() updateActive() snap("click+0.3s " .. tostring(name)) end)
+        C_Timer.After(1.0, function() updateActive() snap("click+1.0s " .. tostring(name)) end)
+    end)
     box.cache[spell.name] = b
     return b
 end
@@ -267,84 +290,175 @@ function updateNumbers()
     local now = GetTime()
     for _, b in ipairs(buttons) do
         local text = ""
-        if db.showNumbers and b.endTime then
+        local frac, r, g, bl
+        if b.endTime then
             local left = b.endTime - now
             if left > 0 then
-                text = formatLeft(left)
-                if left <= 5 then b.time:SetTextColor(1, 0.3, 0.3)
-                elseif left <= 15 then b.time:SetTextColor(1, 0.82, 0.1)
-                else b.time:SetTextColor(1, 1, 1) end
+                if left <= 5 then r, g, bl = 1, 0.3, 0.3
+                elseif left <= 15 then r, g, bl = 1, 0.82, 0.1
+                else r, g, bl = 0.30, 0.90, 0.80 end
+                if db.showNumbers then
+                    text = formatLeft(left)
+                    b.time:SetTextColor(r == 0.30 and 1 or r, r == 0.30 and 1 or g, r == 0.30 and 1 or bl)
+                end
+                if b.totalDur and b.totalDur > 0 then frac = math.min(1, left / b.totalDur) end
             else
                 b.endTime = nil
+                b.isActive = false
             end
         end
+        if b.isActive and not b.endTime then
+            r, g, bl = 0.45, 0.60, 0.65   -- active, duration not known yet
+            frac = 1
+        end
         b.time:SetText(text)
+        if db.showBar and frac then
+            local w = math.max(1, (BTN - 4) * frac)
+            b.bar:SetWidth(w)
+            b.bar:SetColorTexture(r, g, bl, 1)
+            b.barBg:Show()
+            b.bar:Show()
+        else
+            b.barBg:Hide()
+            b.bar:Hide()
+        end
     end
 end
 
 local function isSecret(x) return issecretvalue and issecretvalue(x) end
 
--- Finds, for every button, the active totem in the game's totem slots and starts its timer.
--- The game may hide totem names and times ("secret values"). Then the name cannot be matched, so the
--- button you clicked last in that element row is used, and the game's own cooldown numbers show the time.
-local function updateActive()
-    if not box then return end
-    local slots = {}
-    if GetTotemInfo then
-        for slot = 1, 4 do
-            local ok, have, name, start, dur = pcall(GetTotemInfo, slot)
-            if ok then slots[slot] = { have = have, name = name, start = start, dur = dur } end
-        end
-    end
+-- Totem timers.
+-- Out of combat the game tells us everything (name, start, duration). In combat it hides ALL of it
+-- ("secret values"), even whether a totem exists. So the addon tracks totems itself:
+--   * when you cast a totem spell (the name is readable), it starts a timer from the known duration,
+--   * when the game does give readable data, it takes over and also LEARNS the duration for next time,
+--   * a totem update long after the cast, with hidden data, means the totem ended or was killed.
+local SLOT_ELEMENT = { [1] = "fire", [2] = "earth", [3] = "water", [4] = "air" }
+local DEFAULT_DUR = { ["Searing Totem"] = 30, ["Earthbind Totem"] = 45, ["Tremor Totem"] = 300 }
+local active = {}   -- element -> { btn =, castAt =, endTime =, total = }
 
+local function buttonByName(name)
+    for _, b in ipairs(buttons) do
+        if b.spellName == name then return b end
+    end
+    for _, b in ipairs(buttons) do
+        if name:find(b.spellName, 1, true) then return b end
+    end
+    return nil
+end
+
+local function knownDuration(name)
+    return (db.durations and db.durations[name]) or DEFAULT_DUR[name]
+end
+
+local function learnDuration(name, dur)
+    if dur and dur > 0 then
+        db.durations = db.durations or {}
+        db.durations[name] = dur
+    end
+end
+
+-- Reads one totem slot. Returns nil while the game hides the values.
+local function readSlot(slot)
+    if not GetTotemInfo then return nil end
+    local ok, have, name, start, dur = pcall(GetTotemInfo, slot)
+    if not ok or isSecret(have) or isSecret(name) or isSecret(start) or isSecret(dur) then return nil end
+    if type(name) ~= "string" then name = "" end
+    return { name = name, start = tonumber(start) or 0, dur = tonumber(dur) or 0 }
+end
+
+local function applyActive()
     local now = GetTime()
-    local lastByElement = {}
-    for _, b in ipairs(buttons) do
-        if b.lastCast and now - b.lastCast < 900 then
-            local cur = lastByElement[b.element]
-            if not cur or b.lastCast > cur.lastCast then lastByElement[b.element] = b end
-        end
+    for el, a in pairs(active) do
+        if a.endTime and now > a.endTime + 0.5 then active[el] = nil end
     end
-
     for _, b in ipairs(buttons) do
-        local found
-        for slot = 1, 4 do
-            local s = slots[slot]
-            if s then
-                local exists
-                if isSecret(s.have) then exists = true else exists = s.have and true or false end
-                if exists then
-                    if s.name and not isSecret(s.name) then
-                        if s.name ~= "" and (s.name:find(b.spellName, 1, true) or b.spellName:find(s.name, 1, true)) then
-                            found = s
-                            break
-                        end
-                    elseif TOTEM_SLOT[b.element] == slot and lastByElement[b.element] == b then
-                        found = s
-                        break
-                    end
-                end
-            end
-        end
-
-        if found then
-            local okT, endT = pcall(function()
-                if found.start and found.dur and found.dur > 0 then return found.start + found.dur end
-            end)
-            b.endTime = okT and endT or nil
-            local useCooldownNumbers = db.showNumbers and not b.endTime
-            if db.showTimer or useCooldownNumbers then
-                pcall(b.cd.SetCooldown, b.cd, found.start, found.dur)
-                pcall(b.cd.SetDrawSwipe, b.cd, db.showTimer and true or false)
-                pcall(b.cd.SetHideCountdownNumbers, b.cd, not useCooldownNumbers)
+        local a = active[b.element]
+        if a and a.btn == b then
+            b.isActive = true
+            b.endTime = a.endTime
+            b.totalDur = a.total
+            if db.showTimer and a.endTime and a.total then
+                pcall(b.cd.SetCooldown, b.cd, a.endTime - a.total, a.total)
+                pcall(b.cd.SetDrawSwipe, b.cd, true)
+                pcall(b.cd.SetHideCountdownNumbers, b.cd, true)
             else
                 b.cd:Clear()
             end
         else
+            b.isActive = false
             b.endTime = nil
+            b.totalDur = nil
             b.cd:Clear()
         end
     end
+end
+
+function updateActive()
+    if not box then return end
+    local now = GetTime()
+    for slot = 1, 4 do
+        local el = SLOT_ELEMENT[slot]
+        local info = readSlot(slot)
+        if info then
+            local a = active[el]
+            if info.name ~= "" and info.start > 0 then
+                local b = buttonByName(info.name)
+                if b then
+                    learnDuration(b.spellName, info.dur)
+                    active[el] = {
+                        btn = b, castAt = info.start,
+                        endTime = (info.dur > 0) and (info.start + info.dur) or nil,
+                        total = (info.dur > 0) and info.dur or nil,
+                    }
+                end
+            elseif not (a and now - a.castAt < 1.2) then
+                active[el] = nil   -- readable and empty: no totem (ignoring the moment right after a cast)
+            end
+        end
+    end
+    applyActive()
+end
+
+-- Called when the player has just cast a totem spell.
+local function onTotemCast(name)
+    local b = buttonByName(name)
+    if not b or not TOTEM_SLOT[b.element] then return end
+    local dur = knownDuration(b.spellName)
+    local now = GetTime()
+    active[b.element] = { btn = b, castAt = now, endTime = dur and (now + dur) or nil, total = dur }
+    applyActive()
+    C_Timer.After(0.4, updateActive)   -- sync with the real data when it is readable (also learns the duration)
+end
+
+-- Called when the game reports a change in a totem slot.
+local function onTotemSlotUpdate(slot)
+    local el = SLOT_ELEMENT[slot]
+    local a = el and active[el]
+    if a and not readSlot(slot) and GetTime() - a.castAt > 1.5 then
+        active[el] = nil   -- hidden data and no recent cast: the totem ended or was killed
+    end
+    updateActive()
+end
+
+-- Debug recorder: writes what the game returns for the four totem slots into the saved variables
+-- (db.debugLog), so the real behaviour can be inspected after /reload or logout.
+snap = function(tag)
+    if not db then return end
+    db.debugLog = db.debugLog or {}
+    local parts = { string.format("%.1f", GetTime()), tostring(tag) }
+    for slot = 1, 4 do
+        local res = { pcall(GetTotemInfo, slot) }
+        local f = {}
+        for i = 2, 8 do
+            local v = res[i]
+            if isSecret(v) then f[#f + 1] = "<secret " .. type(v) .. ">" else f[#f + 1] = tostring(v) end
+        end
+        parts[#parts + 1] = "s" .. slot .. "=" .. table.concat(f, "/")
+    end
+    local log = db.debugLog
+    log[#log + 1] = table.concat(parts, " | ")
+    while #log > 80 do table.remove(log, 1) end
 end
 
 ---------------------------------------------------------------------------
@@ -479,18 +593,24 @@ end
 ---------------------------------------------------------------------------
 local ev = CreateFrame("Frame")
 ev:RegisterEvent("ADDON_LOADED")
-ev:SetScript("OnEvent", function(self, event, arg1)
+ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
     if event == "ADDON_LOADED" then
         if arg1 ~= ADDON then return end
         RobauShamanToolkitDB = RobauShamanToolkitDB or {}
         db = RobauShamanToolkitDB
         copyDefaults(defaults, db)
+        if not db.timerStyleV2 then
+            -- the old clock sweep looked like a cooldown; the duration bar replaces it
+            db.showTimer = false
+            db.timerStyleV2 = true
+        end
         self:UnregisterEvent("ADDON_LOADED")
         local _, class = UnitClass("player")
         if class ~= "SHAMAN" then return end
         self:RegisterEvent("PLAYER_ENTERING_WORLD")
         self:RegisterEvent("SPELLS_CHANGED")
         self:RegisterEvent("PLAYER_TOTEM_UPDATE")
+        self:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
         self:RegisterEvent("PLAYER_REGEN_ENABLED")
         self:RegisterEvent("UNIT_INVENTORY_CHANGED")
         self:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
@@ -506,7 +626,18 @@ ev:SetScript("OnEvent", function(self, event, arg1)
         if pendingRebuild then rebuild() end
         updateAlert()
     elseif event == "PLAYER_TOTEM_UPDATE" then
-        updateActive()
+        onTotemSlotUpdate(arg1)
+        snap("PLAYER_TOTEM_UPDATE slot=" .. tostring(arg1))
+    elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
+        local name
+        if C_Spell and C_Spell.GetSpellInfo and arg3 and not isSecret(arg3) then
+            local ok, info = pcall(C_Spell.GetSpellInfo, arg3)
+            if ok and type(info) == "table" then name = info.name end
+        end
+        if name and name:find("Totem") then
+            onTotemCast(name)
+            snap("cast " .. name)
+        end
     else
         updateAlert()
     end
@@ -606,25 +737,28 @@ Hub.Register("shaman", "Shaman Toolkit", "Interface\\Icons\\Spell_Nature_StoneSk
             function(v) db.shown = v if box then box:SetShown(v and #buttons > 0) end end)
         UI.Check(p, "Lock position", "Off: drag the blue title bar to move it.", L, -114,
             function() return db.locked end, function(v) db.locked = v end)
-        UI.Check(p, "Show timer swipe on active totems", "The clock sweep over the icon.", L, -140,
+        UI.Check(p, "Show clock sweep on active totems", "Fills like a buff timer (the lit part is the time left). Off by default, the bar and number are clearer.", L, -140,
             function() return db.showTimer end,
             function(v) db.showTimer = v updateActive() end)
         UI.Check(p, "Show seconds left as a number", "A big number on the icon: seconds, or minutes for long totems.", L, -166,
             function() return db.showNumbers end,
             function(v) db.showNumbers = v updateNumbers() end)
-        UI.Stepper(p, function(v) return string.format("Size: %.1f", v) end, L, -202,
+        UI.Check(p, "Show a duration bar under active totems", "A thin bar along the bottom of the icon that shrinks while the totem stands.", L, -192,
+            function() return db.showBar end,
+            function(v) db.showBar = v updateNumbers() end)
+        UI.Stepper(p, function(v) return string.format("Size: %.1f", v) end, L, -228,
             function() return db.scale end,
             function(v) db.scale = v if box then box:SetScale(v) end end, 0.5, 2.5, 0.1)
-        UI.Stepper(p, function(v) return "Spacing: " .. v end, L, -234,
+        UI.Stepper(p, function(v) return "Spacing: " .. v end, L, -260,
             function() return db.spacing end,
             function(v) db.spacing = v rebuild() end, 0, 24, 2)
-        UI.Button(p, "Reset positions", 140, L, -276, function()
+        UI.Button(p, "Reset positions", 140, L, -302, function()
             db.point, db.x, db.y = defaults.point, defaults.x, defaults.y
             db.alertPoint, db.alertX, db.alertY = defaults.alertPoint, defaults.alertX, defaults.alertY
             if box then box:ClearAllPoints() box:SetPoint(db.point, UIParent, db.point, db.x, db.y) end
             if alert then alert:ClearAllPoints() alert:SetPoint(db.alertPoint, UIParent, db.alertPoint, db.alertX, db.alertY) end
         end)
-        UI.Note(p, "Totems you do not know yet do not appear. Missing one? The spell may have another name on this client.", L, -310, 250)
+        UI.Note(p, "Totems you do not know yet do not appear. Missing one? The spell may have another name on this client.", L, -336, 250)
 
         UI.Header(p, "Weapon imbue alert", R, -66)
         UI.Check(p, "Warn when my weapon has no imbue", nil, R, -88,

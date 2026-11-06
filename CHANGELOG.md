@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.4
+
+- **Shaman Toolkit**: totem timers rewritten. In combat the game hides all totem data ("secret values"), so the addon now starts its own timer when you cast a totem and learns each totem's duration whenever the game shows it out of combat. A recast restarts the timer, and a totem update long after the cast ends it.
+- **Shaman Toolkit**: a duration bar under each active totem replaces the cooldown-style sweep (the sweep is optional and now fills like a buff timer). Totems whose duration is not known yet show a dim full bar until learned.
+- **Shaman Toolkit**: a debug recorder stores the raw totem data in `RobauShamanToolkitDB.debugLog` (last 80 events) to help diagnose client changes.
+
 ## 1.5.3
 
 - **Shaman Toolkit**: totem timers keep working when the game hides totem names or times. The totem is matched by the button you clicked last in that element row and the game's own countdown numbers are used.
