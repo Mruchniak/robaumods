@@ -1,0 +1,14 @@
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Packaged builds
+*.zip
+
+# Editor
+.vscode/
+.idea/
+
+# Local game data
+WTF/
