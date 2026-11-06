@@ -21,6 +21,7 @@ local defaults = {
     customLure = "",      -- typed item name, overrides the above
     stats = { casts = 0, catches = 0, lineTime = 0, items = {} },
     mmShow = true,        -- ON/OFF button at the minimap
+    toolboxClosed = false, -- closed with the x button; switching the mode on opens it again
     remind = true,        -- pulsing reminder when fishing mode is on but you are not fishing
     idleSeconds = 60,     -- ...after this many seconds without a line in the water
     remPoint = "CENTER", remX = 0, remY = 240,
@@ -53,6 +54,7 @@ local pendingLure = false
 local lureLockUntil = 0
 local lureMode = false   -- true: the cast key currently applies a lure instead of casting
 local refreshMinimapBtn   -- defined below, called from refreshToolbox
+local applyToolboxVisibility   -- defined below, called from switchOn
 local lastActive = 0      -- last time the line was in the water (or the mode was switched on)
 local snoozeUntil = 0
 local movingFor = 0
@@ -240,6 +242,9 @@ local function switchOn()
         return false
     end
     db.on = true
+    db.toolbox = true          -- the toolbox is the face of the mode: switching on always shows it
+    db.toolboxClosed = false
+    applyToolboxVisibility()
     lastActive = GetTime()
     snoozeUntil = 0
     setCVar("softTargetInteract", "3")
@@ -662,9 +667,9 @@ local function showTip(self, title, body)
     GameTooltip:Show()
 end
 
-local function applyToolboxVisibility()
+applyToolboxVisibility = function()
     if not toolbox or InCombatLockdown() then return end
-    toolbox:SetShown(db.toolbox and true or false)
+    toolbox:SetShown((db.toolbox and not db.toolboxClosed) and true or false)
 end
 
 ---------------------------------------------------------------------------
@@ -717,8 +722,13 @@ local function createMinimapBtn()
     mmBtn:SetScript("OnClick", function(_, button)
         if button == "RightButton" then
             ns.Hub.Open("lazyfish")
+        elseif db.on then
+            -- switching off from the minimap also hides the window; switching on brings it back
+            switchOff()
+            db.toolboxClosed = true
+            applyToolboxVisibility()
         else
-            toggleMode()
+            switchOn()
         end
     end)
     mmBtn:SetScript("OnEnter", function(self)
@@ -731,7 +741,7 @@ local function createMinimapBtn()
         end
         if db.key then GameTooltip:AddDoubleLine("Key", shortKey(db.key), 1, 1, 1, 0.55, 1, 0.85) end
         GameTooltip:AddLine(" ")
-        GameTooltip:AddLine("Left click: switch " .. (db.on and "off" or "on"), 0.7, 0.7, 0.7)
+        GameTooltip:AddLine(db.on and "Left click: switch off and hide the window" or "Left click: switch on and show the window", 0.7, 0.7, 0.7)
         GameTooltip:AddLine("Right click: settings", 0.7, 0.7, 0.7)
         GameTooltip:AddLine("Drag: move icon", 0.7, 0.7, 0.7)
         GameTooltip:Show()
@@ -957,7 +967,7 @@ local function build()
     hide:SetScript("OnClick", function()
         -- closing the toolbox also switches fishing mode off, so the key is never left taken over
         if db.on then switchOff() end
-        db.toolbox = false
+        db.toolboxClosed = true
         applyToolboxVisibility()
     end)
     hide:SetScript("OnEnter", function(self) showTip(self, "Close", "Closes the toolbox and switches fishing mode off. Bring it back in Robau Mod Suite - LazyFisher, or with the minimap button.") end)
@@ -1378,7 +1388,7 @@ Hub.Register("lazyfish", "LazyFisher", "Interface\\Icons\\Trade_Fishing",
             function(v) db.idleSeconds = v end, 15, 600, 15)
         UI.Check(p, "Show the toolbox", "The small box with on/off, lure and hide buttons.", L, -264,
             function() return db.toolbox end,
-            function(v) db.toolbox = v applyToolboxVisibility() end)
+            function(v) db.toolbox = v if v then db.toolboxClosed = false end applyToolboxVisibility() end)
 
         UI.Header(p, "Lure", R, -66)
         UI.Note(p, "The lure button never applies a new lure while one is still active on your pole, and it needs a fishing pole in your main hand.", R, -88, 240)
@@ -1440,6 +1450,7 @@ SlashCmdList.LAZYFISHER = function(input)
         toggleMode()
     elseif cmd == "show" then
         db.toolbox = true
+        db.toolboxClosed = false
         applyToolboxVisibility()
     else
         Hub.Open("lazyfish")

@@ -113,7 +113,7 @@ Fishing with less clicking. **Every cast and every pull still needs your key pre
 
 **Minimap ON/OFF button**
 - A separate round button at the minimap. **Green ring and `ON`** when fishing mode is on, **red ring, grey icon and `OFF`** when it is off.
-- Left click switches the mode, right click opens the settings, drag moves it. It can be hidden in the settings.
+- Left click switches the mode **and shows or hides the toolbox with it** (on shows it, off hides it). Right click opens the settings, drag moves it. It can be hidden in the settings.
 
 **Reminder**
 - If fishing mode is on but you are not fishing and you **walk, mount up, enter combat or stand idle** (60 s by default), a pulsing **"LAZYFISHER IS ON"** reminder appears, because your key is taken over in that state.

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.5.1
+
+- **LazyFisher**: switching the mode on (minimap button, settings or command) always opens the toolbox again, also after it was closed with the x button.
+- **LazyFisher**: the minimap button hides the toolbox when it switches the mode off.
+
 ## 1.5.0
 
 - **LazyFisher**: closing the toolbox now also switches fishing mode off.
