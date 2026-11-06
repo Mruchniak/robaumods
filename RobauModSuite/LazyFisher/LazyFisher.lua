@@ -52,6 +52,7 @@ local fishingName = "Fishing"
 local pendingBinding = false
 local pendingLure = false
 local lureLockUntil = 0
+local applyingLure = false   -- a lure application was just started; its cast has not ended yet
 local lureMode = false   -- true: the cast key currently applies a lure instead of casting
 local refreshMinimapBtn   -- defined below, called from refreshToolbox
 local applyToolboxVisibility   -- defined below, called from switchOn
@@ -888,6 +889,7 @@ local function build()
     cast:SetScript("PostClick", function()
         if lureMode then
             lureLockUntil = GetTime() + 8
+            applyingLure = true
             if not InCombatLockdown() then updateLure() end
         end
     end)
@@ -1030,6 +1032,7 @@ local function build()
     lure:SetScript("PostClick", function()
         -- block a second use right away; the real state is re-read after a few seconds
         lureLockUntil = GetTime() + 8
+            applyingLure = true
         if not InCombatLockdown() then updateLure() end
     end)
     lure:SetScript("OnEnter", function(self) showTip(self, "Fishing lure", self.reason or "") end)
@@ -1133,6 +1136,7 @@ local function build()
     fishBtn:SetScript("PostClick", function()
         if lureMode then
             lureLockUntil = GetTime() + 8
+            applyingLure = true
             if not InCombatLockdown() then updateLure() end
         end
     end)
@@ -1291,6 +1295,9 @@ ev:SetScript("OnEvent", function(self, event, arg1)
         self:RegisterEvent("PLAYER_LOGIN")
         self:RegisterEvent("UNIT_SPELLCAST_CHANNEL_START")
         self:RegisterEvent("UNIT_SPELLCAST_CHANNEL_STOP")
+        self:RegisterEvent("UNIT_SPELLCAST_STOP")
+        self:RegisterEvent("UNIT_SPELLCAST_INTERRUPTED")
+        self:RegisterEvent("UNIT_SPELLCAST_FAILED")
         self:RegisterEvent("PLAYER_REGEN_ENABLED")
         self:RegisterEvent("BAG_UPDATE_DELAYED")
         self:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
@@ -1311,6 +1318,14 @@ ev:SetScript("OnEvent", function(self, event, arg1)
         if arg1 == "player" then
             -- the channel state is updated just after the event, so check one frame later
             C_Timer.After(0.05, onChannelChange)
+        end
+    elseif event == "UNIT_SPELLCAST_STOP" or event == "UNIT_SPELLCAST_INTERRUPTED" or event == "UNIT_SPELLCAST_FAILED" then
+        -- The lure cast ended (finished, or cancelled by moving). Drop the "applying" lock after a short
+        -- grace so the weapon enchant has time to show up; if it was cancelled, the next press applies again.
+        if arg1 == "player" and applyingLure then
+            applyingLure = false
+            lureLockUntil = GetTime() + 0.6
+            C_Timer.After(0.7, updateLure)
         end
     elseif event == "LOOT_OPENED" or event == "LOOT_READY" then
         pcall(recordLoot)

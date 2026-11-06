@@ -2,7 +2,7 @@
 ## Title: Robau Mod Suite
 ## Notes: Ksenofob (chat language filter), LFG Message, Shaman Toolkit (totems + imbue alert) and LazyFisher (one-key fishing) in one addon with one settings window and one minimap icon.
 ## Author: robal
-## Version: 1.5.1
+## Version: 1.5.2
 ## IconTexture: Interface\Icons\INV_Misc_Gear_01
 ## SavedVariables: RobauModSuiteDB, KsenofobDB, LFGMsgDB, RobauShamanToolkitDB, LazyFisherDB
 

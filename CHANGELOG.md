@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.2
+
+- **LazyFisher**: if applying a lure is cancelled (for example by moving), the next key press tries to apply it again instead of casting the line. The "applying" lock now ends when the cast ends.
+
 ## 1.5.1
 
 - **LazyFisher**: switching the mode on (minimap button, settings or command) always opens the toolbox again, also after it was closed with the x button.
