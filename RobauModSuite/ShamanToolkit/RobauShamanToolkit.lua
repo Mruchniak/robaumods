@@ -173,6 +173,7 @@ local function makeButton(spell, element)
         GameTooltip:Show()
     end)
     b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    b:SetScript("PostClick", function(self) self.lastCast = GetTime() end)
     box.cache[spell.name] = b
     return b
 end
@@ -281,26 +282,68 @@ function updateNumbers()
     end
 end
 
+local function isSecret(x) return issecretvalue and issecretvalue(x) end
+
+-- Finds, for every button, the active totem in the game's totem slots and starts its timer.
+-- The game may hide totem names and times ("secret values"). Then the name cannot be matched, so the
+-- button you clicked last in that element row is used, and the game's own cooldown numbers show the time.
 local function updateActive()
     if not box then return end
-    for _, b in ipairs(buttons) do
-        local slot = TOTEM_SLOT[b.element]
-        local on = false
-        if slot and GetTotemInfo then
+    local slots = {}
+    if GetTotemInfo then
+        for slot = 1, 4 do
             local ok, have, name, start, dur = pcall(GetTotemInfo, slot)
-            if ok and have and name and not (issecretvalue and issecretvalue(name)) then
-                if name:find(b.spellName, 1, true) or b.spellName:find(name, 1, true) then
-                    on = true
-                    local okT, endT = pcall(function()
-                        if start and dur and dur > 0 then return start + dur end
-                    end)
-                    b.endTime = okT and endT or nil
-                    if db.showTimer and b.endTime then pcall(b.cd.SetCooldown, b.cd, start, dur) end
+            if ok then slots[slot] = { have = have, name = name, start = start, dur = dur } end
+        end
+    end
+
+    local now = GetTime()
+    local lastByElement = {}
+    for _, b in ipairs(buttons) do
+        if b.lastCast and now - b.lastCast < 900 then
+            local cur = lastByElement[b.element]
+            if not cur or b.lastCast > cur.lastCast then lastByElement[b.element] = b end
+        end
+    end
+
+    for _, b in ipairs(buttons) do
+        local found
+        for slot = 1, 4 do
+            local s = slots[slot]
+            if s then
+                local exists
+                if isSecret(s.have) then exists = true else exists = s.have and true or false end
+                if exists then
+                    if s.name and not isSecret(s.name) then
+                        if s.name ~= "" and (s.name:find(b.spellName, 1, true) or b.spellName:find(s.name, 1, true)) then
+                            found = s
+                            break
+                        end
+                    elseif TOTEM_SLOT[b.element] == slot and lastByElement[b.element] == b then
+                        found = s
+                        break
+                    end
                 end
             end
         end
-        if not on then b.endTime = nil end
-        if not on or not db.showTimer then b.cd:Clear() end
+
+        if found then
+            local okT, endT = pcall(function()
+                if found.start and found.dur and found.dur > 0 then return found.start + found.dur end
+            end)
+            b.endTime = okT and endT or nil
+            local useCooldownNumbers = db.showNumbers and not b.endTime
+            if db.showTimer or useCooldownNumbers then
+                pcall(b.cd.SetCooldown, b.cd, found.start, found.dur)
+                pcall(b.cd.SetDrawSwipe, b.cd, db.showTimer and true or false)
+                pcall(b.cd.SetHideCountdownNumbers, b.cd, not useCooldownNumbers)
+            else
+                b.cd:Clear()
+            end
+        else
+            b.endTime = nil
+            b.cd:Clear()
+        end
     end
 end
 
@@ -514,6 +557,16 @@ SlashCmdList.ROBAUSHAMAN = function(input)
             rebuild()
         else
             say("usage: /rst add <spell name> <earth|fire|water|air|imbue>")
+        end
+    elseif cmd == "totems" then
+        local function d(x)
+            if isSecret(x) then return "<secret " .. type(x) .. ">" end
+            return tostring(x)
+        end
+        for slot = 1, 4 do
+            local ok, have, name, start, dur = pcall(GetTotemInfo, slot)
+            say("slot " .. slot .. ": ok=" .. tostring(ok) .. " have=" .. d(have) .. " name=" .. d(name)
+                .. " start=" .. d(start) .. " dur=" .. d(dur))
         end
     elseif cmd == "dump" then
         for _, el in ipairs(ELEMENTS) do

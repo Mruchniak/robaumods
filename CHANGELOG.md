@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.5.3
+
+- **Shaman Toolkit**: totem timers keep working when the game hides totem names or times. The totem is matched by the button you clicked last in that element row and the game's own countdown numbers are used.
+- **Shaman Toolkit**: new `/rst totems` command prints what the game returns for the four totem slots (for debugging).
+
 ## 1.5.2
 
 - **LazyFisher**: if applying a lure is cancelled (for example by moving), the next key press tries to apply it again instead of casting the line. The "applying" lock now ends when the cast ends.
