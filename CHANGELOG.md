@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.0
+
+- **LazyFisher**: closing the toolbox now also switches fishing mode off.
+- **LazyFisher**: separate minimap ON/OFF button, green when on and red when off.
+- **LazyFisher**: pulsing reminder when fishing mode is on but you walk, mount up, enter combat or stand idle. Click to switch off, right click to snooze.
+- **LazyFisher**: if fishing mode is switched off during combat, the key is released right after combat.
+
 ## 1.4.0
 
 First public release of the combined addon.

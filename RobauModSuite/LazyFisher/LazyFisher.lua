@@ -20,6 +20,11 @@ local defaults = {
     lureQuality = "best", -- "best" or "weakest" (used when lure is "auto")
     customLure = "",      -- typed item name, overrides the above
     stats = { casts = 0, catches = 0, lineTime = 0, items = {} },
+    mmShow = true,        -- ON/OFF button at the minimap
+    remind = true,        -- pulsing reminder when fishing mode is on but you are not fishing
+    idleSeconds = 60,     -- ...after this many seconds without a line in the water
+    remPoint = "CENTER", remX = 0, remY = 240,
+    mmAngle = 190,
     btnPoint = "CENTER", btnX = 0, btnY = -140,
     point = "CENTER", x = 0, y = -220,
     saved = {},           -- cvars to restore when switching off
@@ -47,6 +52,11 @@ local pendingBinding = false
 local pendingLure = false
 local lureLockUntil = 0
 local lureMode = false   -- true: the cast key currently applies a lure instead of casting
+local refreshMinimapBtn   -- defined below, called from refreshToolbox
+local lastActive = 0      -- last time the line was in the water (or the mode was switched on)
+local snoozeUntil = 0
+local movingFor = 0
+local reminder
 local poleState = "ok"    -- "ok" | "equip" (pole in bags, not in hand) | "none" (no pole anywhere)
 local poleInBags         -- { id =, name = } of a fishing pole found in the bags
 local scanDirty = true
@@ -168,6 +178,7 @@ local function refreshFishBtn()
 end
 
 local function refreshToolbox()
+    if refreshMinimapBtn then refreshMinimapBtn() end
     refreshFishBtn()
     if not toolbox then return end
     toolbox.setPower(db.on)
@@ -229,6 +240,8 @@ local function switchOn()
         return false
     end
     db.on = true
+    lastActive = GetTime()
+    snoozeUntil = 0
     setCVar("softTargetInteract", "3")
     if db.autoLoot then setCVar("autoLootDefault", "1") end
     if db.loudSound then
@@ -654,6 +667,200 @@ local function applyToolboxVisibility()
     toolbox:SetShown(db.toolbox and true or false)
 end
 
+---------------------------------------------------------------------------
+-- Minimap ON/OFF button: green ring and "ON" when fishing mode is on, red ring, grey icon and "OFF" when off
+---------------------------------------------------------------------------
+local mmBtn
+
+local function placeMinimapBtn()
+    local angle = math.rad(db.mmAngle or 190)
+    local w = Minimap:GetWidth()
+    if not w or w < 50 then w = 140 end
+    local radius = (w / 2) + 5
+    mmBtn:ClearAllPoints()
+    mmBtn:SetPoint("CENTER", Minimap, "CENTER", math.cos(angle) * radius, math.sin(angle) * radius)
+end
+
+local function createMinimapBtn()
+    mmBtn = CreateFrame("Button", "LazyFisherMinimapButton", Minimap)
+    mmBtn:SetSize(31, 31)
+    mmBtn:SetFrameStrata("HIGH")
+    mmBtn:SetFrameLevel(50)
+    mmBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    mmBtn:RegisterForDrag("LeftButton")
+    mmBtn:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+
+    local bg = mmBtn:CreateTexture(nil, "BACKGROUND")
+    bg:SetSize(20, 20)
+    bg:SetPoint("CENTER")
+    bg:SetColorTexture(0.04, 0.09, 0.11, 1)
+
+    mmBtn.icon = mmBtn:CreateTexture(nil, "ARTWORK")
+    mmBtn.icon:SetSize(17, 17)
+    mmBtn.icon:SetPoint("CENTER")
+    mmBtn.icon:SetTexture("Interface\\Icons\\Trade_Fishing")
+    mmBtn.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+
+    mmBtn.ring = mmBtn:CreateTexture(nil, "OVERLAY")
+    mmBtn.ring:SetSize(53, 53)
+    mmBtn.ring:SetPoint("TOPLEFT")
+    mmBtn.ring:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+
+    -- small ON / OFF tag under the icon
+    mmBtn.tagBg = mmBtn:CreateTexture(nil, "OVERLAY")
+    mmBtn.tagBg:SetSize(22, 10)
+    mmBtn.tagBg:SetPoint("BOTTOM", mmBtn, "BOTTOM", 0, -3)
+    mmBtn.tag = mmBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    mmBtn.tag:SetPoint("CENTER", mmBtn.tagBg, "CENTER", 0, 0)
+    pcall(function() mmBtn.tag:SetFont(mmBtn.tag:GetFont(), 8, "OUTLINE") end)
+
+    mmBtn:SetScript("OnClick", function(_, button)
+        if button == "RightButton" then
+            ns.Hub.Open("lazyfish")
+        else
+            toggleMode()
+        end
+    end)
+    mmBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+        GameTooltip:AddLine("LazyFisher")
+        if db.on then
+            GameTooltip:AddLine("ON", 0.35, 1, 0.55)
+        else
+            GameTooltip:AddLine("OFF", 1, 0.35, 0.35)
+        end
+        if db.key then GameTooltip:AddDoubleLine("Key", shortKey(db.key), 1, 1, 1, 0.55, 1, 0.85) end
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddLine("Left click: switch " .. (db.on and "off" or "on"), 0.7, 0.7, 0.7)
+        GameTooltip:AddLine("Right click: settings", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine("Drag: move icon", 0.7, 0.7, 0.7)
+        GameTooltip:Show()
+    end)
+    mmBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    mmBtn:SetScript("OnDragStart", function(self)
+        self:SetScript("OnUpdate", function()
+            local mx, my = Minimap:GetCenter()
+            local scale = Minimap:GetEffectiveScale()
+            local cx, cy = GetCursorPosition()
+            db.mmAngle = math.deg(math.atan2(cy / scale - my, cx / scale - mx))
+            placeMinimapBtn()
+        end)
+    end)
+    mmBtn:SetScript("OnDragStop", function(self) self:SetScript("OnUpdate", nil) end)
+end
+
+refreshMinimapBtn = function()
+    if not db or not Minimap then return end
+    if not mmBtn then
+        local ok = pcall(createMinimapBtn)
+        if not ok then return end
+    end
+    if db.on then
+        mmBtn.icon:SetDesaturated(false)
+        mmBtn.ring:SetVertexColor(0.30, 1, 0.50)
+        mmBtn.tagBg:SetColorTexture(0.05, 0.30, 0.15, 1)
+        mmBtn.tag:SetText("ON")
+        mmBtn.tag:SetTextColor(0.6, 1, 0.7)
+    else
+        mmBtn.icon:SetDesaturated(true)
+        mmBtn.ring:SetVertexColor(1, 0.30, 0.30)
+        mmBtn.tagBg:SetColorTexture(0.35, 0.06, 0.06, 1)
+        mmBtn.tag:SetText("OFF")
+        mmBtn.tag:SetTextColor(1, 0.65, 0.65)
+    end
+    placeMinimapBtn()
+    mmBtn:SetShown(db.mmShow ~= false)
+end
+
+---------------------------------------------------------------------------
+-- Reminder: fishing mode is on but you are walking, mounted, in combat or idle.
+-- Your key is taken over in that state, so this pulses until you switch off (click) or snooze (right click).
+---------------------------------------------------------------------------
+local function createReminder()
+    local f = CreateFrame("Button", "LazyFisherReminder", UIParent)
+    f:SetSize(310, 60)
+    f:SetFrameStrata("HIGH")
+    f:SetClampedToScreen(true)
+    f:SetMovable(true)
+    f:SetPoint(db.remPoint or "CENTER", UIParent, db.remPoint or "CENTER", db.remX or 0, db.remY or 240)
+    f:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    f:RegisterForDrag("LeftButton")
+    ns.UI.Panel(f, { 0.17, 0.04, 0.05, 0.96 }, ns.UI.PAL.warn)
+
+    local icon = f:CreateTexture(nil, "ARTWORK")
+    icon:SetSize(40, 40)
+    icon:SetPoint("LEFT", 10, 0)
+    icon:SetTexture("Interface\\Icons\\Trade_Fishing")
+    icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+
+    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", icon, "TOPRIGHT", 10, -2)
+    title:SetText("LAZYFISHER IS ON")
+    title:SetTextColor(1, 0.3, 0.3)
+    f.sub = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    f.sub:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -3)
+    f.sub:SetWidth(240)
+    f.sub:SetJustifyH("LEFT")
+
+    local ag = f:CreateAnimationGroup()
+    ag:SetLooping("BOUNCE")
+    local a = ag:CreateAnimation("Alpha")
+    a:SetFromAlpha(1)
+    a:SetToAlpha(0.35)
+    a:SetDuration(0.7)
+    f.pulse = ag
+
+    f:SetScript("OnClick", function(_, button)
+        if button == "RightButton" then
+            snoozeUntil = GetTime() + 300
+            f:Hide()
+        else
+            switchOff()
+        end
+    end)
+    f:SetScript("OnDragStart", function(self) self:StartMoving() end)
+    f:SetScript("OnDragStop", function(self)
+        self:StopMovingOrSizing()
+        local point, _, _, x, y = self:GetPoint()
+        db.remPoint, db.remX, db.remY = point, x, y
+    end)
+    f:Hide()
+    reminder = f
+end
+
+local function updateReminder(dt)
+    if not db then return end
+    local now = GetTime()
+    local fishing = isFishing()
+    if fishing then lastActive = now end
+
+    local speed = 0
+    if GetUnitSpeed then
+        local ok, sp = pcall(GetUnitSpeed, "player")
+        if ok and type(sp) == "number" and not (issecretvalue and issecretvalue(sp)) then speed = sp end
+    end
+    if speed > 0 then movingFor = movingFor + dt else movingFor = 0 end
+
+    local need = false
+    if db.on and db.remind ~= false and not fishing and now > snoozeUntil then
+        need = movingFor >= 3
+            or (IsMounted and IsMounted())
+            or (UnitAffectingCombat and UnitAffectingCombat("player"))
+            or (now - lastActive) >= (db.idleSeconds or 60)
+    end
+
+    if need then
+        if not reminder then createReminder() end
+        reminder.sub:SetText("Your key " .. (db.key and shortKey(db.key) or "") ..
+            " is taken over. Click to switch off. Right click: remind me in 5 min.")
+        reminder:Show()
+        if not reminder.pulse:IsPlaying() then reminder.pulse:Play() end
+    elseif reminder then
+        reminder.pulse:Stop()
+        reminder:Hide()
+    end
+end
+
 local function build()
     local spellName
     if C_Spell and C_Spell.GetSpellInfo then
@@ -748,10 +955,12 @@ local function build()
     hhl:SetAllPoints()
     hhl:SetColorTexture(1, 1, 1, 0.15)
     hide:SetScript("OnClick", function()
+        -- closing the toolbox also switches fishing mode off, so the key is never left taken over
+        if db.on then switchOff() end
         db.toolbox = false
         applyToolboxVisibility()
     end)
-    hide:SetScript("OnEnter", function(self) showTip(self, "Hide toolbox", "Bring it back in Robau Mod Suite - LazyFisher.") end)
+    hide:SetScript("OnEnter", function(self) showTip(self, "Close", "Closes the toolbox and switches fishing mode off. Bring it back in Robau Mod Suite - LazyFisher, or with the minimap button.") end)
     hide:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     -- on / off switch (pill)
@@ -1087,6 +1296,7 @@ ev:SetScript("OnEvent", function(self, event, arg1)
             refreshToolbox()
         end
         C_Timer.NewTicker(1, function() updateLure() end)
+        C_Timer.NewTicker(0.5, function() updateReminder(0.5) end)
     elseif event == "UNIT_SPELLCAST_CHANNEL_START" or event == "UNIT_SPELLCAST_CHANNEL_STOP" then
         if arg1 == "player" then
             -- the channel state is updated just after the event, so check one frame later
@@ -1096,6 +1306,7 @@ ev:SetScript("OnEvent", function(self, event, arg1)
         pcall(recordLoot)
     elseif event == "PLAYER_REGEN_ENABLED" then
         if pendingBinding then applyBinding() end
+        if db and not db.on then ClearOverrideBindings(owner) end
         applyToolboxVisibility()
         refreshFishBtn()
         updateLure()
@@ -1156,6 +1367,15 @@ Hub.Register("lazyfish", "LazyFisher", "Interface\\Icons\\Trade_Fishing",
             function() return db.autoLoot end, function(v) db.autoLoot = v end)
         UI.Check(p, "Louder effects, quiet music", "Easier to hear the splash. Your settings come back when you switch off.", L, -238,
             function() return db.loudSound end, function(v) db.loudSound = v end)
+        UI.Check(p, "Show the ON/OFF button at the minimap", "Green ring and ON when fishing mode is on, red ring and OFF when it is off. Left click switches, right click opens these settings.", L, -290,
+            function() return db.mmShow ~= false end,
+            function(v) db.mmShow = v refreshMinimapBtn() end)
+        UI.Check(p, "Remind me when fishing mode is on but I am not fishing", "A pulsing reminder if you walk, mount up, enter combat or stand idle with fishing mode on, since your key is taken over then. Click it to switch off, right click to snooze 5 minutes.", L, -316,
+            function() return db.remind ~= false end,
+            function(v) db.remind = v end)
+        UI.Stepper(p, function(v) return "Idle before reminding: " .. v .. "s" end, L, -344,
+            function() return db.idleSeconds or 60 end,
+            function(v) db.idleSeconds = v end, 15, 600, 15)
         UI.Check(p, "Show the toolbox", "The small box with on/off, lure and hide buttons.", L, -264,
             function() return db.toolbox end,
             function(v) db.toolbox = v applyToolboxVisibility() end)

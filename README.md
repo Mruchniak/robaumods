@@ -104,12 +104,20 @@ Fishing with less clicking. **Every cast and every pull still needs your key pre
 - While fishing: auto loot, louder effects and quiet music (your own settings are restored when you switch off).
 
 **Toolbox**
-- ON/OFF switch, the key shown on a chip, a **lure** button, and a close button.
+- ON/OFF switch, the key shown on a chip, a **lure** button, and a close button. **Closing the toolbox (x) also switches fishing mode off**, so your key is never left taken over by a hidden window.
 - **Lure button**: click to apply a lure to your pole. It never applies a new lure while one is still active, and it needs a fishing pole in your main hand.
 - **Arrow above the lure**: a list of the lures you carry. Click one to use it.
 - **Mode chip** (right side): shows which lure is chosen and whether auto-apply is on. Click it to turn on **apply when it expires** (your key applies a new lure first, then casts) and to pick **strong** or **weak** automatic lure.
 - **Lure bar**: time left on the active lure.
 - **Progress bar** (bottom): drains while the line is in the water. You can also click it to cast.
+
+**Minimap ON/OFF button**
+- A separate round button at the minimap. **Green ring and `ON`** when fishing mode is on, **red ring, grey icon and `OFF`** when it is off.
+- Left click switches the mode, right click opens the settings, drag moves it. It can be hidden in the settings.
+
+**Reminder**
+- If fishing mode is on but you are not fishing and you **walk, mount up, enter combat or stand idle** (60 s by default), a pulsing **"LAZYFISHER IS ON"** reminder appears, because your key is taken over in that state.
+- Click it to switch fishing mode off, right click to snooze for 5 minutes. It can be turned off and the idle time changed in the settings.
 
 **Safety**
 - If fishing mode is on and you have **no fishing pole in your hand**, a warning appears with a **Switch LazyFisher off** button.
@@ -118,7 +126,7 @@ Fishing with less clicking. **Every cast and every pull still needs your key pre
 
 **Fishing Stats** tab: casts, catches, success rate, fish per hour and time with the line out, for this session and all time, plus a list of what you caught with item quality colours.
 
-Commands: `/lazyfish` (opens the tab), `/lazyfish on`, `/lazyfish off`, `/lazyfish toggle`, `/lazyfish show`.
+Commands: `/lazyfish` (opens the tab), `/lazyfish on`, `/lazyfish off`, `/lazyfish toggle`, `/lazyfish show` (brings the toolbox back).
 
 ---
 
